@@ -1,4 +1,8 @@
-import { defineConfig } from "vite";
+import { defineConfig } from 'vite'
+
+// https://vitejs.dev/config/
 export default defineConfig({
-  base: "/interactive-kaleidoscope/", // <-- set to repo name for GH Pages
-});
+  // Required for GitHub Project Pages:
+  // https://<user>.github.io/<repo> -> base must be "/<repo>/"
+  base: '/interactive-kaleidoscope/',
+})
