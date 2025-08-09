@@ -1,23 +1,67 @@
 name: Deploy to GitHub Pages
+
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm ci || npm i
-      - run: npm run build
-      - run: touch dist/.nojekyll
-      - uses: actions/upload-pages-artifact@v3
-        with: { path: "dist" }
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm i
+
+      - name: Build
+        run: npm run build
+
+      - name: Detect build output directory
+        id: detect
+        shell: bash
+        run: |
+          for dir in "dist" "build" "out" "public"; do
+            if [ -d "$dir" ]; then
+              echo "dir=$dir" >> "$GITHUB_OUTPUT"
+              echo "Detected build output directory: $dir"
+              exit 0
+            fi
+          done
+          echo "No known build output directory found after build." >&2
+          echo "Repository tree:"
+          ls -la
+          exit 1
+
+      - name: Disable Jekyll
+        run: touch "${{ steps.detect.outputs.dir }}/.nojekyll"
+
+      - name: Add SPA fallback (optional)
+        shell: bash
+        run: |
+          if [ -f "${{ steps.detect.outputs.dir }}/index.html" ] && [ ! -f "${{ steps.detect.outputs.dir }}/404.html" ]; then
+            cp "${{ steps.detect.outputs.dir }}/index.html" "${{ steps.detect.outputs.dir }}/404.html"
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.detect.outputs.dir }}
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -25,5 +69,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - id: deployment
+      - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
