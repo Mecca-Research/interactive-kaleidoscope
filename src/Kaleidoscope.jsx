@@ -1,16 +1,13 @@
 import React, { useRef, useEffect, useState } from 'react';
 
 /**
- * Interactive Kaleidoscope Generator — v1.1
- * Improvements:
- *  • Retina/high‑res rendering (DPR aware) so fine detail is crisp
- *  • Exaggerated textures (harmonic combos + swirl phase + time)
- *  • Color system FIXED: added colors now visibly affect strokes
- *    (segment‑batched stroking instead of one giant path)
- *  • New animation engine with explicit dt physics
- *    - Separate patternSpeed, rotationSpeed, swirlRate
- *    - Zoom: on/off, direction (in/out), speed slider
- *  • Safer resize, stable rAF
+ * Interactive Kaleidoscope Generator — v1.2
+ * Changes from v1.1:
+ *  • ❌ Removed all zoom logic + UI (simpler, steadier camera)
+ *  • 🎚️ Added global Sensitivity (scales all speeds 0.1–1.0)
+ *  • 🧪 Speed smoothing (1st‑order low‑pass, τ≈0.2 s) to prevent jumpy changes
+ *  • 🐢 Finer ranges & steps (0.001) for rotation/pattern/swirl
+ *  • ⏱️ Safe dt clamp (≤50 ms) for tab switches
  */
 
 const TAU = Math.PI * 2;
@@ -26,25 +23,22 @@ export default function Kaleidoscope() {
   const [colors, setColors] = useState(['#ff0055', '#00d2ff', '#ffd166']);
   const [complexity, setComplexity] = useState(6); // harmonic layers
 
-  // Animation parameters
+  // Animation parameters (targets)
   const [run, setRun] = useState(true);
-  const [patternSpeed, setPatternSpeed] = useState(1.0);      // affects internal texture time
-  const [rotationSpeed, setRotationSpeed] = useState(0.25);   // rad/s
-  const [swirlRate, setSwirlRate] = useState(0.6);            // swirl phase speed
-
-  // Zoom controls
-  const [zoomEnabled, setZoomEnabled] = useState(false);
-  const [zoomDirection, setZoomDirection] = useState('in'); // 'in' | 'out'
-  const [zoomSpeed, setZoomSpeed] = useState(0.25);         // per second
+  const [patternSpeed, setPatternSpeed] = useState(1.0);    // internal texture time (units/s)
+  const [rotationSpeed, setRotationSpeed] = useState(0.25); // rad/s
+  const [swirlRate, setSwirlRate] = useState(0.6);          // phase units/s
+  const [sensitivity, setSensitivity] = useState(0.5);      // global scale 0.1..1.0
 
   // Internal animation state
   const stateRef = useRef({
     t: 0,            // pattern time
     rot: 0,          // global rotation
     swirl: 0,        // swirl phase
-    zoom: 1,         // camera zoom
-    panX: 0,
-    panY: 0,
+    // smoothed velocities (actuals used by integrator)
+    patV: 1.0,
+    rotV: 0.25,
+    swlV: 0.6,
   });
 
   useEffect(() => {
@@ -69,18 +63,28 @@ export default function Kaleidoscope() {
 
     let last = performance.now();
     const loop = (now) => {
-      const dt = Math.max(0, (now - last) / 1000); // seconds
+      // seconds; clamp to avoid huge jumps after tab switches
+      const dt = Math.min(0.050, Math.max(0, (now - last) / 1000));
       last = now;
 
       const S = stateRef.current;
       if (run) {
-        S.t += dt * patternSpeed;
-        S.rot += dt * rotationSpeed;
-        S.swirl += dt * swirlRate;
-        if (zoomEnabled) {
-          const dir = zoomDirection === 'in' ? 1 : -1;
-          S.zoom = clamp(S.zoom * Math.exp(dir * zoomSpeed * dt), 0.25, 4);
-        }
+        // target speeds with global sensitivity scale
+        const tgtPat = patternSpeed * clamp(sensitivity, 0.1, 1.0);
+        const tgtRot = rotationSpeed * clamp(sensitivity, 0.1, 1.0);
+        const tgtSwl = swirlRate * clamp(sensitivity, 0.1, 1.0);
+
+        // first‑order smoothing toward targets (τ≈0.2s)
+        const tau = 0.2;
+        const alpha = 1 - Math.exp(-dt / tau);
+        S.patV += (tgtPat - S.patV) * alpha;
+        S.rotV += (tgtRot - S.rotV) * alpha;
+        S.swlV += (tgtSwl - S.swlV) * alpha;
+
+        // integrate
+        S.t += dt * S.patV;
+        S.rot += dt * S.rotV;
+        S.swirl += dt * S.swlV;
       }
 
       renderFrame(ctx, S, { segments, colors, complexity });
@@ -89,7 +93,7 @@ export default function Kaleidoscope() {
     rafRef.current = requestAnimationFrame(loop);
 
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); ro.disconnect(); };
-  }, [segments, colors, complexity, run, patternSpeed, rotationSpeed, swirlRate, zoomEnabled, zoomDirection, zoomSpeed]);
+  }, [segments, colors, complexity, run, patternSpeed, rotationSpeed, swirlRate, sensitivity]);
 
   // ---- UI helpers ----
   const updateColor = (index, value) => {
@@ -98,32 +102,39 @@ export default function Kaleidoscope() {
   const addColor = () => setColors((cs) => (cs.length >= 12 ? cs : [...cs, '#ffffff']));
   const removeColor = () => setColors((cs) => (cs.length <= 3 ? cs : cs.slice(0, -1)));
 
+  const labelNum = (x, digits = 3) => Number(x).toFixed(digits);
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', background: '#0b0b0b' }}>
       <canvas ref={canvasRef} style={{ width: '100%', height: '88vh', display: 'block', background: 'black' }} />
 
-      <div style={{ position: 'absolute', top: 10, left: 10, background: '#0009', padding: 12, borderRadius: 12, color: '#fff', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 13, display: 'grid', gap: 8, maxWidth: 420 }}>
-        <div style={{ fontWeight: 700 }}>Kaleidoscope Controls (v1.1)</div>
+      <div style={{ position: 'absolute', top: 10, left: 10, background: '#0009', padding: 12, borderRadius: 12, color: '#fff', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 13, display: 'grid', gap: 8, maxWidth: 460 }}>
+        <div style={{ fontWeight: 700 }}>Kaleidoscope Controls (v1.2)</div>
         <div>Segments: <input type="range" min={3} max={64} value={segments} onChange={(e)=>setSegments(Number(e.target.value))} /></div>
         <div>Complexity: <input type="range" min={1} max={16} value={complexity} onChange={(e)=>setComplexity(Number(e.target.value))} /></div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-          <label>Run <input type="checkbox" checked={run} onChange={(e)=>setRun(e.target.checked)} /></label>
-          <label>Pattern Speed <input type="range" min={0} max={3} step={0.01} value={patternSpeed} onChange={(e)=>setPatternSpeed(Number(e.target.value))} /></label>
-          <label>Rotation Rate (rad/s) <input type="range" min={-2} max={2} step={0.01} value={rotationSpeed} onChange={(e)=>setRotationSpeed(Number(e.target.value))} /></label>
-          <label>Swirl Rate <input type="range" min={0} max={4} step={0.01} value={swirlRate} onChange={(e)=>setSwirlRate(Number(e.target.value))} /></label>
-        </div>
+          <label style={{ display:'flex', alignItems:'center', gap:6 }}>Run <input type="checkbox" checked={run} onChange={(e)=>setRun(e.target.checked)} /></label>
 
-        <div style={{ display:'grid', gridTemplateColumns:'auto 1fr', alignItems:'center', gap:8 }}>
-          <label>Zoom</label>
-          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-            <label><input type="checkbox" checked={zoomEnabled} onChange={(e)=>setZoomEnabled(e.target.checked)} /> Enabled</label>
-            <select value={zoomDirection} onChange={(e)=>setZoomDirection(e.target.value)}>
-              <option value="in">In</option>
-              <option value="out">Out</option>
-            </select>
-            <input type="range" min={0} max={2} step={0.01} value={zoomSpeed} onChange={(e)=>setZoomSpeed(Number(e.target.value))} />
-          </div>
+          <label>
+            Sensitivity · {labelNum(sensitivity, 2)}
+            <input type="range" min={0.1} max={1.0} step={0.01} value={sensitivity} onChange={(e)=>setSensitivity(Number(e.target.value))} />
+          </label>
+
+          <label>
+            Pattern Speed · {labelNum(patternSpeed * sensitivity)}
+            <input type="range" min={0} max={2} step={0.001} value={patternSpeed} onChange={(e)=>setPatternSpeed(Number(e.target.value))} />
+          </label>
+
+          <label>
+            Rotation Rate (rad/s) · {labelNum(rotationSpeed * sensitivity)}
+            <input type="range" min={-0.5} max={0.5} step={0.001} value={rotationSpeed} onChange={(e)=>setRotationSpeed(Number(e.target.value))} />
+          </label>
+
+          <label>
+            Swirl Rate · {labelNum(swirlRate * sensitivity)}
+            <input type="range" min={0} max={2} step={0.001} value={swirlRate} onChange={(e)=>setSwirlRate(Number(e.target.value))} />
+          </label>
         </div>
 
         <div>
@@ -149,11 +160,10 @@ function renderFrame(ctx, S, { segments, colors, complexity }) {
   const h = ctx.canvas.clientHeight;
   ctx.clearRect(0, 0, w, h);
 
-  // Center + rotate + zoom
+  // Center + rotate (no zoom)
   ctx.save();
   ctx.translate(w / 2, h / 2);
   ctx.rotate(S.rot);
-  ctx.scale(S.zoom, S.zoom);
 
   const radius = Math.min(w, h) * 0.55;
   const theta = TAU / clamp(segments|0, 2, 128);
@@ -180,7 +190,7 @@ function drawWedge(ctx, radius, S, colors, complexity, theta) {
 
   // Exaggerated texture: multi‑harmonic radial curve with time & swirl
   const L = Math.max(600, complexity * 450); // samples per wedge (resolution)
-  const baseLW = Math.max(0.75, 2.5 / (S.zoom));
+  const baseLW = 1.25; // constant baseline (no zoom scaling)
 
   let prev = null;
   let prevColorIndex = -1;
